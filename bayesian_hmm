@@ -1,0 +1,145 @@
+NS = 4;
+NMC = 100;
+mus_hyper = [-1, 0, 0.58, 1];
+taus_hyper = [1, 1, 1, 2];
+eps = 0.1;
+mu_low_bounds = [-Inf, -eps, eps, 0.58];
+mu_up_bounds = [-eps, eps, 0.58, Inf];
+sg_alpha = [1 1 1 1];
+sg_beta = [1, 1, 1, 1];
+sg_bounds = [0.41 0.41 0.41 1];
+N=size(Y,1)
+states = zeros(N, NMC);
+
+st_counts = zeros(NS, NS);
+iloop = 1;
+sigmas = zeros(NS, NMC);
+for i = 1:NS
+    sigmas(i, iloop) = acghhmmsample('gamma', sg_alpha(i), sg_beta(i), sg_bounds(i));
+end
+mus = zeros(NS, NMC);
+for i = 1:NS
+    if i == 4
+        mu_low_bounds(4) = mus(3,iloop) + 3*sigmas(3,iloop);
+    end
+    mus(i, iloop) = acghhmmsample('normal', mus_hyper(i), taus_hyper(i),...
+        mu_low_bounds(i), mu_up_bounds(i));
+end
+a = ones(NS, NS);
+A = acghhmmsample('dirichlet', a, NS);
+PI =@(x, n) (ones(1,n)/(eye(n) -x + ones(n)))';
+Pi = PI(A, NS);
+B = zeros(NS, N);
+for i = 1:NS
+    B(i,:) = normpdf(Y(:,1), mus(i,iloop), sigmas(i,iloop));
+end
+states(:, iloop) = acghhmmfb(Pi, A, B);
+for iloop = 2:NMC
+    % Compute the number of transitions from state i to state j
+    for i =1:NS
+        for j = 1:NS
+            st_counts(i, j) = sum((states(1:N-1, iloop-1) == i) .* (states(2:N, iloop-1) == j));
+        end
+    end
+    % Updating block B1
+    % Generate the transition matrix from the Dirichlet distributions
+    C = acghhmmsample('dirichlet', st_counts + 1, NS);
+    % Compute the state probabilities under stationary distribution of a
+    % given transition matrix C.
+    PiC = PI(C, NS);
+    % Compute the accepting probability using a Metropolis-Hastings step
+    beta = min([1, exp(log(PiC(states(1, iloop-1))) - log(Pi(states(1, iloop-1))))]);
+    if rand < beta
+        A = C;
+        Pi = PiC;
+    end
+    % Updating block B2
+    % Generate copy number states using Forward propagate, backward sampling [4].
+    states(:, iloop) = acghhmmfb(Pi, A, B);
+    % Updating blocks B3 and B4
+    for i = 1:NS
+        idx_s = states(:, iloop) == i;
+        num_states = sum(idx_s);
+        % If state i is not observed, then draw from its prior parameters
+        if num_states == 0
+            mus(i, iloop) = acghhmmsample('normal', mus_hyper(i),...
+                taus_hyper(i), mu_low_bounds(i), mu_up_bounds(i));
+            sigmas(i, iloop)= acghhmmsample('gamma', sg_alpha(i),...
+                sg_beta(i), sg_bounds(i));
+        else
+            Y_avg = mean(Y(idx_s));
+            theta_prec = 1/taus_hyper(i)^2 + num_states/sigmas(i,iloop-1)^2;
+            weight_means = (mus_hyper(i)/(taus_hyper(i)^2) +...
+                Y_avg * num_states/(sigmas(i, iloop-1)^2))/theta_prec;
+            % Compute mus - B3
+            mus(i, iloop) = acghhmmsample('normal', weight_means, ...
+                1/sqrt(theta_prec), mu_low_bounds(i), mu_up_bounds(i));
+            % Compute sigmas - B4
+            Y_v = sum((Y(idx_s) - mus(i, iloop)).^2);
+            sigmas(i, iloop) = acghhmmsample('gamma', sg_alpha(i)+num_states/2,...
+                sg_beta(i)+Y_v/2, sg_bounds(i));
+        end
+        % Update the emission matrix with new mus and sigmas.
+        B(i,:) = normpdf(Y, mus(i,iloop),sigmas(i,iloop));
+    end
+end
+figure;
+for j = 1:NS
+    subplot(2,2,j)
+    ksdensity(mus(j,:));
+    title(sprintf('State %d', j))
+end
+suptitle('Distribution of Mu of States');
+hold off;
+figure;
+for j = 1:NS
+    subplot(2,2,j)
+    ksdensity(sigmas(j,:));
+    title(sprintf('State %d', j))
+end
+suptitle('Distribution of Sigma of States');
+hold off;
+mus
+clone_states = zeros(1, N);
+state_prob = zeros(NS, N);
+state_count = zeros(NS, N);
+for i = 1:N % for each clone
+    state = states(i, :);
+    for j=1:NS
+        state_count(j, i) = sum(state == j);
+    end
+    selState = find(state_count(:,i) == max(state_count(:,i)));
+    if length(selState) > 1
+        if i ~= 1
+            clone_states(i) = clone_states(i-1);
+        else
+            clone_states(i) = min(selState);
+        end
+    else
+        clone_states(i) = selState;
+    end
+    state_prob(:, i) = state_count(:,i)/NMC;
+end
+clone_states = clone_states';
+figure;
+leg = zeros(1,4);
+for i = 1:N
+    if clone_states(i) == 1
+        leg(1) = plot(i,Y(i),'v', 'MarkerFaceColor', [1 0.2 0.2],...
+            'MarkerEdgeColor', 'none');
+    elseif clone_states(i) == 2
+        leg(2) = plot(i,Y(i),'o', 'Color', [0.4 0.4 0.4]);
+    elseif clone_states(i) == 3
+        leg(3) = plot(i,Y(i),'^', 'MarkerFaceColor', [0.2 1 0.2],...
+            'MarkerEdgeColor', 'none');
+    elseif clone_states(i) == 4
+        leg(4) = plot(i, Y(i), '^', 'MarkerFaceColor', [0.2 0.2 1],...
+            'MarkerEdgeColor', 'none');
+    end
+    hold on;
+end
+% ylim(gca, ylims)
+legend(leg, 'State 1', 'State 2','State 3','State 4')
+xlabel('Index')
+ylabel('Log2(ratio)')
+title('State Label')
