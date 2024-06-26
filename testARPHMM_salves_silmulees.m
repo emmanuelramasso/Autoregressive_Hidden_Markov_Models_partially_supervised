@@ -1,21 +1,62 @@
 function perf = testARPHMM_salves_silmulees(lessalves, labelInit) 
+% ADD TO PATH WITH SUBFOLDERS
+% /home/emmanuel.ramasso/Documents/PROGRAMMES/GITHUB/CHMM_with_partial_labels 
+% AND CURRENT FOLDER
+%
+% Run [lessalves, lesentrees, labelInit] = test_generation 
+% to generate signals in four classes
+% Then run perf = testARPHMM_salves_silmulees(lessalves, labelInit)
+% to evaluate the performance in terms of different criteria
+%
+% The algorithm works as follows, see [3]:
+% Phase 1 : train on a few signals (in vector "reference", hard coded here)
+% Phase 2 : apply the model on testing, generate anomaly values and cluster
+% them.
+%
+% References:
+% The idea of including partial knowledge on states is from [1] and [2]
+% applied to prognostics, while its application to acoustic emission
+% signals is from [3]. 
+%
+% [1] On partially supervised learning and inference in dynamic Bayesian 
+% networks for prognostics with uncertain factual evidence: Illustration 
+% with Markov switching models, Pablo Juesas, Emmanuel Ramasso, 
+% Sébastien Drujont, Vincent Placet,  Proceedings of the European 
+% Conference of the PHM Society, Vol. 3 No. 1 (2016) 
+%
+% [2] Autoregressive Hidden Markov Models with partial knowledge on latent, 
+% space applied to aero-engines prognostics, Pablo Juesas, Emmanuel
+% Ramasso, Sébastien Drujont, Vincent Placet,  arxiv https://arxiv.org/abs/2105.00211, 2024.
+% 
+% [3] Ramasso, E., Butaud, P., Jeannin, T., Sarasini, F., Placet, V., 
+% Godin, N., ...Gabrion, X. (2020). Learning the representation of raw 
+% acoustic emission signals by direct generative modelling and its use in
+% chronology-based clusters identification. Eng. Appl. Artif. Intell., 90,
+% 103478. doi: 10.1016/j.engappai.2020.103478
+%
+% E. Ramasso 2016-2024
+%
 
-addpath PHMM/
-addpath PHMM/utils/
-addpath utils/
+ 
+% signals selected to train the model, can specify several of them
+referencesSalves = [1] % 107 205 306
 
-S={}; for i=1:length(lessalves), for j=1:size(lessalves{i},1), 
+% normalise signals
+S={}; 
+for i=1:length(lessalves), 
+    for j=1:size(lessalves{i},1), 
         S=[S; (lessalves{i}(j,:)')/max(lessalves{i}(j,:))]; 
-    end, 
+    end
 end
-salvesOut = S;% lesSalves 
+salvesOut = S;
+
+% add noise eventually 
 % for i=1:length(salvesOut)
 %     salvesOut{i}=salvesOut{i}+randn(size(salvesOut{i}))*0.1;
 % end
 
 nbAvant = 200000
 nbApres = 100000 % MC1 LOC
-
 for i=1:length(salvesOut)
     [a b]=max(salvesOut{i});
     salvesOut{i} = salvesOut{i}(max(1,b-nbAvant+1):min(b+nbApres,length(salvesOut{i})));
@@ -24,17 +65,12 @@ end
 
 % figure, for i=1:length(salvesOut), clf, plot(salvesOut{i}), i, pause(1), end
 
-% numero des salves choisies pour apprendre les modeles
-% referencesSalves=[26 60 130] % MC2 LOC
-referencesSalves=[1]% 107 205 306]
-
 salvesModeles = salvesOut(referencesSalves);
 % salvesModeles{1}=salvesModeles{1}(345:704);
 for i=1:length(referencesSalves)
     figure,plot(salvesModeles{i})
     title(sprintf('Salve de référence %d (%d-ieme de la liste)',i,referencesSalves(i)))
 end
-
 
 clear models
 k = 1 % ne pas toucher
@@ -49,6 +85,7 @@ f=strfind(s,' '); s(f)=[];
 f=strfind(s,'.'); s(f)=[];
 nomTemp = [nomTemp s];
 
+% Training 
 for lsa=1:length(salvesModeles)% parcours les salves de référence et apprend un modele pour chaque salve
     
     z=salvesModeles{lsa};%(1:400)';% un autre
@@ -60,10 +97,12 @@ for lsa=1:length(salvesModeles)% parcours les salves de référence et apprend u
     y=(y-my)/stdy;
     
     % particularité, à voir plus tard
-    if 0
+    if 0 
+        % avec a priori
         gtruth=randi(Q,[length(y),1]);
         pl0=labels2matrix(gtruth, Q);
-    else
+    else 
+        % sans a priori
         pl0 = ones(length(y),Q);
     end
     
@@ -130,7 +169,7 @@ end
 
 % figure,hold on, for i=1:size(B_sup,1), impulse(tf(1,B_sup(i,:),1/Fe)), end
 
-
+% Inference
 % ici on applique les modeles
 lesreponsesLOGL = zeros(size(salvesOut,2),length(models));
 lesreponsesMSE = zeros(size(salvesOut,2),length(models));
@@ -228,7 +267,6 @@ end
 % % analyse des resultats
 % on veut segmenter l'indicateur
 
-
 % [A B]=max(lesreponsesLOGL,[],2); figure,plot(B)
 % [A B]=min(lesreponsesMSE,[],2);figure,plot(B)
 % [A B]=min(lesreponsesNDEI,[],2); figure,plot(B)
@@ -241,8 +279,8 @@ noms2={'LOGL','MSE','NDEI'};
 % global noms, noms={'LOGL','NDEI'};
 X=[lesreponsesLOGL(:,:) lesreponsesNDEI(:,:)];%lesreponsesMSE(:,:) 
 
-% ############### POINT IMPORTANT
-% on ramene tt a la reference
+% ############### 
+% test : on ramene tt a la reference
 % par exemple la premiere reference
 % lsa = referencesSalves(1)
 % 
@@ -253,8 +291,8 @@ X=[lesreponsesLOGL(:,:) lesreponsesNDEI(:,:)];%lesreponsesMSE(:,:)
 % X(lsa,:) % 1ere colonne => =1 ??
 % figure,plot(X), legend(noms2)
 
-
 % X=[lesreponsesLOGL(:,1) lesreponsesNDEI(:,1)];
+
 aretirer = find(isinf(sum(X,2)) | isnan(sum(X,2)) );
 garde = 1:size(X,1); garde(aretirer)=[];
 disp(sprintf('Retire %d pts / %d',length(aretirer),size(X,1)))
@@ -262,14 +300,14 @@ disp(sprintf('Retire %d pts / %d',length(aretirer),size(X,1)))
 X(aretirer,:)=[];
 labelInit2=labelInit; labelInit2(aretirer)=[];
 
-
+% nb clusters expected ?
 KKK=4;
 
+% test
 % que la likelihood
 % global normaliser, normaliser=true;
 % c1 = GK_multi_init(X, 1, KKK, 1, [] ,[], 'gmm1');%, 'fcm');
 % [c1 c2]=kmeans(zscore(X), KKK, 'replicates', 100);
-
 % V1
 % [c1 c2]=kmeans((X), KKK, 'replicates', 100);
 % tabulate(c1)
@@ -283,12 +321,11 @@ gmfit = fitgmdist((X),KKK,'CovarianceType',Sigma,...
 'SharedCovariance',SharedCovariance,'Options',options);
 c1 = cluster(gmfit,X);
 tabulate(c1)
-[perf.a perf.b perf.c perf.d perf.r]=valid_RandIndex(labelInit2,c1)
-perf.r
+disp('adjusted Rand index, unadjusted Rand index, Mirkin''s index and Hubert''s index')
+[perf.ari perf.ri perf.mi perf.hi perf.c]=valid_RandIndex(labelInit2,c1);
+perf, perf.c
 
-
-% peut on trouver automatiquement le nb de clusters ?
-
+% Find the nb of clusters automatically
 clear eva
 k=1;
 rng('default');  % For reproducibility
@@ -301,7 +338,6 @@ for i=1:length(methods)
         k=k+1;
     end
 end
-
 
 perf.eva = eva;
 
